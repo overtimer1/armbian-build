@@ -1,0 +1,49 @@
+name: Build Armbian Headers for NanoPC-T3+
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-headers:
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:noble
+      options: --privileged
+
+    steps:
+      - name: Checkout Armbian build framework
+        uses: actions/checkout@v4
+
+      - name: Checkout specific commit
+        run: |
+          git fetch --depth=50 origin
+          git checkout 16d039191
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
+            python3 python3-pip device-tree-compiler rsync kmod cpio \
+            crossbuild-essential-arm64
+
+      - name: Build kernel headers only
+        run: |
+          ./compile.sh \
+            BOARD=nanopct3plus \
+            BRANCH=edge \
+            RELEASE=trixie \
+            KERNEL_ONLY=yes \
+            KERNEL_CONFIGURE=no \
+            INSTALL_HEADERS=yes \
+            BUILD_MINIMAL=yes
+
+      - name: Find headers package
+        run: |
+          find output/debs -name "linux-headers-*.deb" -ls
+
+      - name: Upload headers artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-headers-deb
+          path: output/debs/linux-headers-*.deb
+          if-no-files-found: error
