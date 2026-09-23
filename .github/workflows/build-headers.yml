@@ -26,39 +26,21 @@ jobs:
           echo "===== Disk after cleanup ====="
           df -h
 
-      # 2. 安全创建 Swap（绕开宿主机的 /swapfile）
-      - name: Setup Swap safely (安全配置交换空间)
-        run: |
-          echo "===== Current swap ====="
-          swapon --show
-          free -h
-
-          if [ ! -f /swapfile-custom ]; then
-            fallocate -l 8G /swapfile-custom || dd if=/dev/zero of=/swapfile-custom bs=1M count=8192
-            chmod 600 /swapfile-custom
-            mkswap /swapfile-custom
-            swapon /swapfile-custom
-          fi
-
-          echo "===== Swap after setup ====="
-          swapon --show
-          free -h
-
-      # 3. 安装依赖（必须放在最前面，确保 git 可用）
+      # 2. 安装依赖
       - name: Install dependencies (安装依赖)
         run: |
           apt-get update
           apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
             python3 python3-pip device-tree-compiler rsync kmod cpio
 
-      # 4. 克隆 Armbian 构建框架并锁定 commit
+      # 3. 克隆 Armbian 构建框架并锁定 commit
       - name: Clone Armbian build framework (克隆构建框架)
         run: |
           git clone https://github.com/armbian/build.git
           cd build
           git checkout 16d039191
 
-      # 5. 只编译内核头文件（限制单线程防 OOM）
+      # 4. 只编译内核头文件（内存充足，恢复多线程）
       - name: Build kernel headers only (编译内核头文件)
         run: |
           cd build
@@ -69,10 +51,9 @@ jobs:
             KERNEL_ONLY=yes \
             KERNEL_CONFIGURE=no \
             INSTALL_HEADERS=yes \
-            BUILD_MINIMAL=yes \
-            MAKE_JOBS=1
+            BUILD_MINIMAL=yes
 
-      # 6. 上传生成的头文件包
+      # 5. 上传生成的头文件包
       - name: Upload headers artifact (上传头文件)
         uses: actions/upload-artifact@v4
         with:
