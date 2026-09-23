@@ -11,41 +11,57 @@ jobs:
       options: --privileged
 
     steps:
+      # 1. 释放磁盘空间
       - name: Free up disk space (释放磁盘空间)
         run: |
-          # 删除 GitHub Actions 预装的无用工具，可释放约 20-30GB 空间
+          echo "===== Disk before cleanup ====="
+          df -h
           rm -rf /usr/share/dotnet
           rm -rf /usr/local/lib/android
           rm -rf /opt/ghc
           rm -rf /usr/local/share/boost
-          rm -rf "$AGENT_TOOLSDIRECTORY"
+          rm -rf /usr/share/swift
+          rm -rf /usr/local/share/chromium
+          rm -rf /opt/hostedtoolcache
+          echo "===== Disk after cleanup ====="
           df -h
 
-      - name: Create Swapfile (增加 8GB 交换空间)
+      # 2. 安全创建 Swap（绕开宿主机的 /swapfile）
+      - name: Setup Swap safely (安全配置交换空间)
         run: |
-          # 官方要求 8GB 内存，GitHub 只有 7GB，我们用 8GB Swap 来硬抗
-          fallocate -l 8G /swapfile
-          chmod 600 /swapfile
-          mkswap /swapfile
-          swapon /swapfile
+          echo "===== Current swap ====="
+          swapon --show
           free -h
 
-      - name: Install dependencies
+          if [ ! -f /swapfile-custom ]; then
+            fallocate -l 8G /swapfile-custom || dd if=/dev/zero of=/swapfile-custom bs=1M count=8192
+            chmod 600 /swapfile-custom
+            mkswap /swapfile-custom
+            swapon /swapfile-custom
+          fi
+
+          echo "===== Swap after setup ====="
+          swapon --show
+          free -h
+
+      # 3. 安装依赖（必须放在最前面，确保 git 可用）
+      - name: Install dependencies (安装依赖)
         run: |
           apt-get update
           apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
             python3 python3-pip device-tree-compiler rsync kmod cpio
 
-      - name: Clone Armbian build framework
+      # 4. 克隆 Armbian 构建框架并锁定 commit
+      - name: Clone Armbian build framework (克隆构建框架)
         run: |
           git clone https://github.com/armbian/build.git
           cd build
           git checkout 16d039191
 
-      - name: Build kernel headers only
+      # 5. 只编译内核头文件（限制单线程防 OOM）
+      - name: Build kernel headers only (编译内核头文件)
         run: |
           cd build
-          # 使用 KERNEL_ONLY 和 INSTALL_HEADERS 只生成头文件
           ./compile.sh \
             BOARD=nanopct3plus \
             BRANCH=edge \
@@ -53,9 +69,11 @@ jobs:
             KERNEL_ONLY=yes \
             KERNEL_CONFIGURE=no \
             INSTALL_HEADERS=yes \
-            BUILD_MINIMAL=yes
+            BUILD_MINIMAL=yes \
+            MAKE_JOBS=1
 
-      - name: Upload headers artifact
+      # 6. 上传生成的头文件包
+      - name: Upload headers artifact (上传头文件)
         uses: actions/upload-artifact@v4
         with:
           name: linux-headers-deb
