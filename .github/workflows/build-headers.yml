@@ -11,23 +11,41 @@ jobs:
       options: --privileged
 
     steps:
-      - name: Checkout Armbian build framework
-        uses: actions/checkout@v4
-
-      - name: Checkout specific commit
+      - name: Free up disk space (释放磁盘空间)
         run: |
-          git fetch --depth=50 origin
-          git checkout 16d039191
+          # 删除 GitHub Actions 预装的无用工具，可释放约 20-30GB 空间
+          rm -rf /usr/share/dotnet
+          rm -rf /usr/local/lib/android
+          rm -rf /opt/ghc
+          rm -rf /usr/local/share/boost
+          rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Create Swapfile (增加 8GB 交换空间)
+        run: |
+          # 官方要求 8GB 内存，GitHub 只有 7GB，我们用 8GB Swap 来硬抗
+          fallocate -l 8G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          free -h
 
       - name: Install dependencies
         run: |
           apt-get update
           apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
-            python3 python3-pip device-tree-compiler rsync kmod cpio \
-            crossbuild-essential-arm64
+            python3 python3-pip device-tree-compiler rsync kmod cpio
+
+      - name: Clone Armbian build framework
+        run: |
+          git clone https://github.com/armbian/build.git
+          cd build
+          git checkout 16d039191
 
       - name: Build kernel headers only
         run: |
+          cd build
+          # 使用 KERNEL_ONLY 和 INSTALL_HEADERS 只生成头文件
           ./compile.sh \
             BOARD=nanopct3plus \
             BRANCH=edge \
@@ -37,13 +55,9 @@ jobs:
             INSTALL_HEADERS=yes \
             BUILD_MINIMAL=yes
 
-      - name: Find headers package
-        run: |
-          find output/debs -name "linux-headers-*.deb" -ls
-
       - name: Upload headers artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-headers-deb
-          path: output/debs/linux-headers-*.deb
+          path: build/output/debs/linux-headers-*.deb
           if-no-files-found: error
