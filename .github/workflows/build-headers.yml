@@ -6,56 +6,61 @@ on:
 jobs:
   build-headers:
     runs-on: ubuntu-latest
-    container:
-      image: ubuntu:noble
-      options: --privileged
 
     steps:
-      # 1. 释放磁盘空间
-      - name: Free up disk space (释放磁盘空间)
+      # 1. 释放磁盘空间（宿主机清理）
+      - name: Free up disk space
         run: |
           echo "===== Disk before cleanup ====="
           df -h
-          rm -rf /usr/share/dotnet
-          rm -rf /usr/local/lib/android
-          rm -rf /opt/ghc
-          rm -rf /usr/local/share/boost
-          rm -rf /usr/share/swift
-          rm -rf /usr/local/share/chromium
-          rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /opt/hostedtoolcache
           echo "===== Disk after cleanup ====="
           df -h
 
-      # 2. 安装依赖
-      - name: Install dependencies (安装依赖)
+      # 2. 安装依赖 & QEMU 模拟器
+      - name: Install dependencies and QEMU
         run: |
-          apt-get update
-          apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
-            python3 python3-pip device-tree-compiler rsync kmod cpio sudo
+          sudo apt-get update
+          sudo apt-get install -y git bc bison flex libssl-dev make libncurses-dev \
+            python3 python3-pip device-tree-compiler rsync kmod cpio sudo \
+            qemu-user-static binfmt-support
 
-      # 3. 创建非 root 用户并赋予 sudo 权限
-      - name: Create non-root user (创建非 root 用户)
+      # 3. 启用 QEMU binfmt（解决 arch-test arm64 失败）
+      - name: Enable QEMU binfmt
         run: |
-          useradd -m -s /bin/bash builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
-          chmod 0440 /etc/sudoers.d/builder
-          chown -R builder:builder /__w 2>/dev/null || true
-          echo "User 'builder' created and ready."
+          sudo update-binfmts --enable qemu-aarch64 || true
+          sudo update-binfmts --enable qemu-arm || true
+          # 验证是否注册成功
+          ls /proc/sys/fs/binfmt_misc/ | grep qemu || echo "No qemu binfmt found, but continuing anyway"
 
-      # 4. 切换到非 root 用户克隆 Armbian 构建框架
-      - name: Clone Armbian build framework (克隆构建框架)
+      # 4. 创建非 root 用户 builder
+      - name: Create non-root user
         run: |
-          su - builder -c '
+          sudo useradd -m -s /bin/bash builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/builder
+          sudo chmod 0440 /etc/sudoers.d/builder
+          echo "User 'builder' created."
+
+      # 5. 以 builder 用户克隆 Armbian 构建框架
+      - name: Clone Armbian build framework
+        run: |
+          sudo -u builder -H bash -c '
             cd /home/builder
             git clone https://github.com/armbian/build.git
             cd build
             git checkout 16d039191
           '
 
-      # 5. 以非 root 用户编译内核头文件
-      - name: Build kernel headers only (编译内核头文件)
+      # 6. 以 builder 用户编译内核头文件
+      - name: Build kernel headers only
         run: |
-          su - builder -c '
+          sudo -u builder -H bash -c '
             cd /home/builder/build
             ./compile.sh \
               BOARD=nanopct3plus \
@@ -67,15 +72,8 @@ jobs:
               BUILD_MINIMAL=yes
           '
 
-      # 6. 修正文件权限后上传头文件
-      - name: Fix permissions and upload headers artifact (修正权限并上传)
-        run: |
-          chown -R root:root /home/builder/build/output 2>/dev/null || true
-          ls -lh /home/builder/build/output/debs/
-        # 注意：上传步骤需要在同一 job 内，但 upload-artifact 无法跨步骤直接引用变量，
-        # 所以这里直接把路径写死即可。
-
-      - name: Upload headers artifact (上传头文件)
+      # 7. 修正权限并上传头文件产物
+      - name: Upload headers artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-headers-deb
